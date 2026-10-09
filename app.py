@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright
 
 EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", "/tmp/nse_eod_exports"))
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-
+NSE_BASE_URL = "https://www.nseindia.com"
 
 
 INDEX_CONFIG = {
