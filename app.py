@@ -1,5 +1,6 @@
 import os
 import asyncio
+import gc
 from pathlib import Path
 from datetime import datetime
 from html import escape
@@ -14,7 +15,10 @@ from playwright.sync_api import sync_playwright
 
 EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", "/tmp/nse_eod_exports"))
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+
 NSE_BASE_URL = "https://www.niftyindices.com/IndexConstituent/"
+
+
 
 INDEX_CONFIG = {
 
@@ -95,7 +99,7 @@ def fetch_market_data(symbols):
         interval="1d",
         auto_adjust=False,
         group_by="ticker",
-        threads=True,
+        threads=False,
         progress=False
     )
 
@@ -256,7 +260,7 @@ def calculate_metrics(constituents, market_data):
 
     return pd.DataFrame(results)
 
-def generate_report(index_name):
+def generate_report(index_name, return_data=False):
 
     # --------------------------------------------------------
     # 1. FETCH CONSTITUENTS
@@ -1388,6 +1392,8 @@ def generate_report(index_name):
         """
     )
 
+    if return_data:
+        return html, metrics_df
     return html
 
 def prepare_export_data(index_name):
@@ -1526,9 +1532,23 @@ def prepare_export_data(index_name):
 
     return metrics
 
-def export_csv(index_name):
+def export_csv(index_name, metrics=None):
 
-    metrics = prepare_export_data(index_name)
+    if metrics is None:
+        metrics = prepare_export_data(index_name)
+    else:
+        metrics = metrics.copy()
+        if "Company" not in metrics.columns and "Company Name" in metrics.columns:
+            metrics["Company"] = metrics["Company Name"]
+        final_columns = [
+            "Symbol", "Close", "Change %", "Volume Change %",
+            "Intraday Range %", "52W Low", "52W High",
+            "Distance from 52W Low %", "Distance from 52W High %", "Company"
+        ]
+        for col in final_columns:
+            if col not in metrics.columns:
+                metrics[col] = np.nan if col != "Company" else metrics.get("Symbol", "")
+        metrics = metrics[final_columns]
 
     date_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -1558,21 +1578,25 @@ def export_csv(index_name):
 
     return path
 
-def export_png(index_name):
-    """Render the final report HTML to a high-resolution PNG with Chromium."""
+def export_png(index_name, html_report=None):
+    """Render the final report HTML to a PNG with a memory-conscious Chromium setup."""
     if index_name not in INDEX_CONFIG:
         raise ValueError(f"Index not configured: {index_name}")
 
-    html_report = generate_report(index_name)
+    if html_report is None:
+        html_report = generate_report(index_name)
     date_str = datetime.now().strftime("%Y-%m-%d")
     safe_name = index_name.replace(" ", "_").replace("/", "_")
     output_file = EXPORT_DIR / f"{safe_name}_EOD_{date_str}.png"
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+        )
         page = browser.new_page(
-            viewport={"width": 1600, "height": 1000},
-            device_scale_factor=2
+            viewport={"width": 1400, "height": 900},
+            device_scale_factor=1
         )
         page.set_content(html_report, wait_until="networkidle", timeout=90000)
         page.screenshot(path=str(output_file), full_page=True)
@@ -1587,9 +1611,12 @@ def ui_generate_report(index_name):
     if not index_name:
         return "<div style='padding:20px;color:#ffcc66;'>Please select an index.</div>", None, None, "Waiting for index selection."
     try:
-        html_report = generate_report(index_name)
-        png_path = export_png(index_name)
-        csv_path = export_csv(index_name)
+        html_report, metrics_df = generate_report(index_name, return_data=True)
+        csv_path = export_csv(index_name, metrics=metrics_df)
+        del metrics_df
+        gc.collect()
+        png_path = export_png(index_name, html_report=html_report)
+        gc.collect()
         status = (
             f"✅ Report generated successfully<br>"
             f"<b>Index:</b> {escape(index_name)}<br>"
