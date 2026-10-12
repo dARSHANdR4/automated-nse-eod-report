@@ -40,6 +40,14 @@ MAX_MARKET_DATA_AGE_DAYS = 5
 MAX_TICKER_LAG_DAYS = 4
 
 
+class DataValidationError(ValueError):
+    def __init__(self, message: str, missing_symbols=None, constituent_count=0, latest_market_date=None):
+        super().__init__(message)
+        self.missing_symbols = list(missing_symbols or [])
+        self.constituent_count = constituent_count
+        self.latest_market_date = latest_market_date
+
+
 def log(message: str) -> None:
     stamp = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
     line = f"[{stamp}] {message}"
@@ -151,9 +159,12 @@ def evaluate_data(index_name: str, constituents: pd.DataFrame, symbols: list[str
     if metrics.empty:
         raise ValueError("No valid stock metrics remain after validation.")
     if missing_count > max_allowed or missing_pct > MISSING_DATA_LIMIT:
-        raise ValueError(
+        raise DataValidationError(
             f"Rejected: {missing_count}/{len(symbols)} constituents missing or stale "
-            f"({missing_pct:.2%}); limit is 2.00%."
+            f"({missing_pct:.2%}); limit is 2.00%.",
+            missing_symbols=missing_symbols,
+            constituent_count=len(symbols),
+            latest_market_date=latest_market_date,
         )
     status = "PARTIAL" if missing_count else "SUCCESS"
     return metrics, missing_symbols, status
@@ -224,6 +235,11 @@ def run_one_index(index_name: str) -> dict:
         del report_metrics, metrics, market_data, constituents, constituents_raw
         gc.collect()
     except Exception as exc:
+        if isinstance(exc, DataValidationError):
+            result["constituents"] = exc.constituent_count
+            result["missing_count"] = len(exc.missing_symbols)
+            result["missing_symbols"] = exc.missing_symbols
+            result["latest_market_date"] = str(exc.latest_market_date or "")
         result["error"] = f"{type(exc).__name__}: {exc}"
         log(f"FAILED {index_name}: {result['error']}")
     return result
@@ -231,9 +247,20 @@ def run_one_index(index_name: str) -> dict:
 
 def main() -> int:
     start = datetime.now(IST)
-    log("NSE EOD automation started. Missing-data policy: maximum 2% inclusive.")
+    selected = sys.argv[1].strip() if len(sys.argv) > 1 else "All indices"
+    if selected == "All indices":
+        selected_indices = list(app.INDEX_CONFIG)
+    elif selected in app.INDEX_CONFIG:
+        selected_indices = [selected]
+    else:
+        raise ValueError(f"Unknown index selection: {selected}")
+
+    log(
+        f"NSE EOD automation started for {len(selected_indices)} index(es). "
+        "Missing-data policy: maximum 2% inclusive."
+    )
     results = []
-    for index_name in app.INDEX_CONFIG:
+    for index_name in selected_indices:
         results.append(run_one_index(index_name))
         gc.collect()
 
@@ -283,7 +310,7 @@ def main() -> int:
     log(f"ZIP package created: {zip_path}")
     print("\n## NSE EOD Automation Summary")
     print(f"- Run date (IST): {date_stamp}")
-    print(f"- Successful/partial indices: {succeeded}/6")
+    print(f"- Successful/partial indices: {succeeded}/{len(results)}")
     print(f"- Partial reports: {partial}")
     print(f"- Failed/rejected indices: {failed}")
     print(f"- ZIP: {zip_path}")
