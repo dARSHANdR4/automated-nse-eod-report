@@ -2,6 +2,20 @@ name: NSE EOD Report Automation
 
 on:
   workflow_dispatch:
+    inputs:
+      index_name:
+        description: "Run one index for the first test, or all six after validation"
+        required: true
+        type: choice
+        default: "NIFTY 50"
+        options:
+          - "NIFTY 50"
+          - "NIFTY NEXT 50"
+          - "NIFTY MIDCAP 150"
+          - "NIFTY SMALLCAP 250"
+          - "NIFTY MIDCAP 50"
+          - "NIFTY SMALLCAP 50"
+          - "All indices"
 
 permissions:
   contents: read
@@ -12,7 +26,7 @@ concurrency:
 
 jobs:
   generate-reports:
-    name: Generate six index reports
+    name: Generate selected index report(s)
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -36,7 +50,7 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Generate and validate reports
-        run: python automation_runner.py
+        run: python automation_runner.py "${{ inputs.index_name }}"
 
       - name: Upload report ZIP and run summary
         if: always()
