@@ -1,0 +1,52 @@
+name: NSE EOD Report Automation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nse-eod-report-automation
+  cancel-in-progress: false
+
+jobs:
+  generate-reports:
+    name: Generate six index reports
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Chromium for PNG export
+        run: python -m playwright install --with-deps chromium
+
+      - name: Generate and validate reports
+        run: python automation_runner.py
+
+      - name: Upload report ZIP and run summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nse-eod-reports-${{ github.run_number }}
+          path: |
+            artifacts/NSE_EOD_Reports_*.zip
+            artifacts/summary.json
+            artifacts/summary.csv
+            artifacts/automation.log
+          if-no-files-found: warn
+          retention-days: 14
