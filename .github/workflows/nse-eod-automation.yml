@@ -1,6 +1,9 @@
 name: NSE EOD Report Automation
 
 on:
+  push:
+    branches:
+      - automation-v1
   workflow_dispatch:
     inputs:
       index_name:
@@ -50,7 +53,7 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Generate and validate reports
-        run: python automation_runner.py "${{ inputs.index_name }}"
+        run: python automation_runner.py "${{ inputs.index_name || 'NIFTY 50' }}"
 
       - name: Upload report ZIP and run summary
         if: always()
