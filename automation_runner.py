@@ -156,12 +156,17 @@ def evaluate_data(index_name: str, constituents: pd.DataFrame, symbols: list[str
     if missing_symbols:
         log(f"{index_name}: missing/stale symbols: {', '.join(missing_symbols)}")
 
-    if metrics.empty:
-        raise ValueError("No valid stock metrics remain after validation.")
     if missing_count > max_allowed or missing_pct > MISSING_DATA_LIMIT:
         raise DataValidationError(
             f"Rejected: {missing_count}/{len(symbols)} constituents missing or stale "
             f"({missing_pct:.2%}); limit is 2.00%.",
+            missing_symbols=missing_symbols,
+            constituent_count=len(symbols),
+            latest_market_date=latest_market_date,
+        )
+    if metrics.empty:
+        raise DataValidationError(
+            "No valid stock metrics remain after validation.",
             missing_symbols=missing_symbols,
             constituent_count=len(symbols),
             latest_market_date=latest_market_date,
