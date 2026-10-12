@@ -11,7 +11,7 @@ import sys
 import time
 import zipfile
 import gc
-from datetime import datetime, date
+from datetime import datetime, date, time as clock_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -38,6 +38,7 @@ import app  # noqa: E402
 MISSING_DATA_LIMIT = 0.02
 MAX_MARKET_DATA_AGE_DAYS = 5
 MAX_TICKER_LAG_DAYS = 4
+MIN_REPORT_TIME_IST = clock_time(16, 15)
 
 
 class DataValidationError(ValueError):
@@ -102,8 +103,18 @@ def evaluate_data(index_name: str, constituents: pd.DataFrame, symbols: list[str
     if len(valid_index_dates) == 0:
         raise ValueError("Market data has no valid trading dates.")
     latest_market_date = valid_index_dates.max().date()
-    today_ist = datetime.now(IST).date()
+    today_now_ist = datetime.now(IST)
+    today_ist = today_now_ist.date()
     age_days = (today_ist - latest_market_date).days
+    if today_now_ist.time().replace(tzinfo=None) < MIN_REPORT_TIME_IST:
+        raise ValueError(
+            "EOD report blocked before 16:15 IST to avoid publishing incomplete intraday candles."
+        )
+    if latest_market_date != today_ist:
+        raise ValueError(
+            f"Today's EOD candle is not available yet: latest market date is "
+            f"{latest_market_date}, expected {today_ist}. Report rejected."
+        )
     if age_days > MAX_MARKET_DATA_AGE_DAYS:
         raise ValueError(
             f"Market data is stale: latest available date {latest_market_date}, "
@@ -260,9 +271,15 @@ def main() -> int:
     else:
         raise ValueError(f"Unknown index selection: {selected}")
 
+    now_ist = datetime.now(IST)
+    if now_ist.weekday() < 5 and now_ist.time().replace(tzinfo=None) < MIN_REPORT_TIME_IST:
+        raise SystemExit(
+            "EOD automation is blocked before 16:15 IST. Run after market close."
+        )
+
     log(
         f"NSE EOD automation started for {len(selected_indices)} index(es). "
-        "Missing-data policy: maximum 2% inclusive."
+        "Missing-data policy: maximum 2% inclusive; EOD gate: after 16:15 IST and today's candle required."
     )
     results = []
     for index_name in selected_indices:
