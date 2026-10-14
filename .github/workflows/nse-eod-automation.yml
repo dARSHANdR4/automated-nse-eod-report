@@ -1,9 +1,6 @@
 name: NSE EOD Report Automation
 
 on:
-  push:
-    paths:
-      - '.github/workflows/nse-eod-automation.yml'
   schedule:
     - cron: "6 17 * * 1-5"
       timezone: "Asia/Kolkata"
