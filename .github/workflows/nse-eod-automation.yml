@@ -2,7 +2,7 @@ name: NSE EOD Report Automation
 
 on:
   schedule:
-    - cron: "5 17 * * 1-5"
+    - cron: "6 17 * * 1-5"
       timezone: "Asia/Kolkata"
   workflow_dispatch:
     inputs:
