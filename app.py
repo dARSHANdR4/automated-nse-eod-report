@@ -613,11 +613,11 @@ def generate_report(index_name, return_data=False):
 
     # --------------------------------------------------------
     # 11. 52 WEEK LOW WATCH
-    #     ALL WITHIN 1%
+    #     ALL WITHIN 5%
     # --------------------------------------------------------
 
     low_watch = metrics_df[
-        metrics_df["Distance from 52W Low %"] <= 1
+        metrics_df["Distance from 52W Low %"] <= 5
     ].copy()
 
     low_watch = low_watch.sort_values(
