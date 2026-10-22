@@ -55,33 +55,111 @@ INDEX_CONFIG = {
 
 def fetch_index_constituents(index_name):
     """
-    Fetch the latest constituent list for any configured NSE index.
-    """
+    Fetch the latest constituent list for a configured NSE index.
 
+    Try the primary NSE Indices endpoint and an archive endpoint. Validate
+    downloaded CSVs before caching them, and use the last valid cached file
+    only when both live sources fail.
+    """
     if index_name not in INDEX_CONFIG:
         raise ValueError(f"Index not configured: {index_name}")
 
     nse_file = INDEX_CONFIG[index_name]["nse_file"]
-    url = NSE_BASE_URL + nse_file
+    cache_dir = EXPORT_DIR / "constituents_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / nse_file
 
+    urls = [
+        f"https://www.niftyindices.com/IndexConstituent/{nse_file}",
+        f"https://nsearchives.nseindia.com/content/indices/{nse_file}",
+    ]
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "text/csv,*/*"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/csv,text/plain,application/octet-stream,*/*",
+        "Referer": "https://www.niftyindices.com/",
+        "Origin": "https://www.niftyindices.com",
+        "Connection": "keep-alive",
     }
 
-    response = requests.get(
-        url,
-        headers=headers,
-        timeout=30
+    errors = []
+    session = requests.Session()
+    session.headers.update(headers)
+
+    for url in urls:
+        try:
+            response = session.get(url, timeout=25)
+            response.raise_for_status()
+
+            # Do not accept an HTML block/error page as a CSV.
+            content_type = response.headers.get("Content-Type", "").lower()
+            if "text/html" in content_type or response.content.lstrip().lower().startswith(
+                (b"<!doctype html", b"<html")
+            ):
+                raise ValueError("Endpoint returned HTML instead of a CSV file")
+
+            constituents = pd.read_csv(BytesIO(response.content))
+            normalized_columns = {
+                str(column).strip().lower(): column
+                for column in constituents.columns
+            }
+            symbol_column = normalized_columns.get("symbol")
+            if symbol_column is None or constituents.empty:
+                raise ValueError(
+                    "Downloaded file is empty or has no Symbol column"
+                )
+
+            # Normalize the expected field name for downstream processing.
+            if symbol_column != "Symbol":
+                constituents = constituents.rename(
+                    columns={symbol_column: "Symbol"}
+                )
+
+            constituents["Symbol"] = (
+                constituents["Symbol"].astype(str).str.strip()
+            )
+            constituents = constituents[
+                constituents["Symbol"].ne("")
+                & constituents["Symbol"].str.lower().ne("nan")
+            ]
+            if constituents.empty:
+                raise ValueError("CSV contains no usable symbols")
+
+            # Cache only a successfully parsed and validated constituent list.
+            constituents.to_csv(cache_path, index=False)
+            print(
+                f"Constituents loaded for {index_name}: "
+                f"{len(constituents)} rows from {url}"
+            )
+            return constituents
+
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
+            print(f"Constituent source failed ({url}): {exc}")
+
+    # Render's local filesystem may be ephemeral, but a cached list can help
+    # during transient upstream failures between restarts.
+    if cache_path.exists():
+        try:
+            cached = pd.read_csv(cache_path)
+            if "Symbol" in cached.columns and not cached.empty:
+                print(
+                    f"WARNING: Using cached constituents for {index_name}; "
+                    "the list may not reflect the latest index changes."
+                )
+                return cached
+        except Exception as exc:
+            errors.append(f"Cached CSV: {exc}")
+
+    details = "\n".join(errors)
+    raise RuntimeError(
+        f"Unable to fetch a valid constituent list for {index_name} from "
+        "the available NSE sources, and no valid cached list is available. "
+        f"Source errors:\n{details}"
     )
-
-    response.raise_for_status()
-
-    constituents = pd.read_csv(
-        BytesIO(response.content)
-    )
-
-    return constituents
 
 def fetch_market_data(symbols):
 
