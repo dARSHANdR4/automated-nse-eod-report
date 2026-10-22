@@ -140,6 +140,66 @@ def fetch_index_constituents(index_name):
             errors.append(f"{url}: {exc}")
             print(f"Constituent source failed ({url}): {exc}")
 
+    # Third-party mirror: a dated history of official NSE index composition
+    # snapshots. This is used only if both live official endpoints are blocked.
+    # The snapshot date is checked so very old compositions are never silently used.
+    mirror_files = {
+        "NIFTY 50": "Nifty_50.csv",
+        "NIFTY NEXT 50": "Nifty_Next_50.csv",
+        "NIFTY MIDCAP 150": "Nifty_Midcap_150.csv",
+        "NIFTY SMALLCAP 250": "Nifty_Smallcap_250.csv",
+        "NIFTY MIDCAP 50": "Nifty_Midcap_50.csv",
+        "NIFTY SMALLCAP 50": "Nifty_Smallcap_50.csv",
+    }
+    mirror_url = (
+        "https://raw.githubusercontent.com/"
+        "floyds1995/Auto-Index-Constituents-Tracker/main/NSE/"
+        + mirror_files[index_name]
+    )
+    try:
+        mirror_response = session.get(mirror_url, timeout=25)
+        mirror_response.raise_for_status()
+        history = pd.read_csv(BytesIO(mirror_response.content))
+        if not {"date", "tickers"}.issubset(
+            {str(column).strip().lower() for column in history.columns}
+        ):
+            raise ValueError("Mirror CSV has an unexpected schema")
+
+        # Normalize column names to support capitalization changes.
+        history.columns = [str(column).strip().lower() for column in history.columns]
+        history["snapshot_date"] = pd.to_datetime(
+            history["date"], format="%m/%d/%Y", errors="coerce"
+        )
+        history = history.dropna(subset=["snapshot_date"]).sort_values("snapshot_date")
+        if history.empty:
+            raise ValueError("Mirror contains no valid dated constituent snapshots")
+
+        latest = history.iloc[-1]
+        snapshot_date = latest["snapshot_date"].date()
+        age_days = (datetime.now().date() - snapshot_date).days
+        if age_days < 0 or age_days > 45:
+            raise ValueError(
+                f"Latest mirrored composition is dated {snapshot_date} "
+                f"({age_days} days old); refusing potentially stale constituents"
+            )
+
+        ticker_value = str(latest["tickers"]).strip()
+        symbols = [item.strip() for item in ticker_value.split(",") if item.strip()]
+        if not symbols:
+            raise ValueError("Latest mirror snapshot contains no symbols")
+
+        constituents = pd.DataFrame({"Symbol": list(dict.fromkeys(symbols))})
+        constituents.to_csv(cache_path, index=False)
+        print(
+            f"WARNING: Official constituent endpoints were unavailable. "
+            f"Using mirrored {index_name} composition dated {snapshot_date} "
+            f"({age_days} days old; {len(constituents)} symbols)."
+        )
+        return constituents
+    except Exception as exc:
+        errors.append(f"GitHub constituent mirror: {exc}")
+        print(f"Constituent mirror failed ({mirror_url}): {exc}")
+
     # Render's local filesystem may be ephemeral, but a cached list can help
     # during transient upstream failures between restarts.
     if cache_path.exists():
